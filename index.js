@@ -11,20 +11,44 @@ const server = http.createServer(app);
 
 // Init Socket.io
 const io = new Server(server, {
+  pingTimeout: 60000,
+  pingInterval: 25000,
   cors: {
-    origin: "*", // Allow all origins for simplicity
+    origin: "*", 
     methods: ["GET", "POST"]
   }
 });
 
+// --- MANUAL CONFIGURATION ---
+const SERVER_CONFIG = {
+  REQUIRED_PLAYERS: 2 // Must match the frontend config
+};
+
 app.get('/', (req, res) => {
-  res.send('DKA Game Server is Running (Strict Mode: 10 Players)');
+  res.send(`DKA Game Server Running. Mode: ${SERVER_CONFIG.REQUIRED_PLAYERS} Players Auto-Start.`);
 });
 
 const rooms = {};
 
-// Constants
-const REQUIRED_PLAYERS = 10;
+// Helper: Check start conditions and start if met
+const checkAndStartGame = (roomId) => {
+  const room = rooms[roomId];
+  if (!room) return;
+
+  const playerCount = room.players.length;
+  const allReady = room.players.every(p => p.isReady);
+
+  // Auto-start condition: Room is full AND everyone is ready
+  if (playerCount === SERVER_CONFIG.REQUIRED_PLAYERS && allReady) {
+    if (room.status !== 'PLAYING') {
+      console.log(`Room ${roomId}: All ${SERVER_CONFIG.REQUIRED_PLAYERS} players ready. Auto-starting...`);
+      room.status = 'PLAYING';
+      // Sync Start: Start in 3 seconds
+      const startTime = Date.now() + 3000;
+      io.to(roomId).emit('start_game', { startTime });
+    }
+  }
+};
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -43,8 +67,8 @@ io.on('connection', (socket) => {
     }
     
     // Check room capacity
-    if (room.players.length >= REQUIRED_PLAYERS) {
-      socket.emit('error_msg', 'Team is full (Max 10 Agents).');
+    if (room.players.length >= SERVER_CONFIG.REQUIRED_PLAYERS) {
+      socket.emit('error_msg', `Team is full (Max ${SERVER_CONFIG.REQUIRED_PLAYERS} Agents).`);
       return;
     }
 
@@ -61,6 +85,9 @@ io.on('connection', (socket) => {
     
     // Broadcast update
     io.to(roomId).emit('room_update', room.players);
+
+    // Check if this new player completes the room (unlikely since they join as unready, but good practice)
+    checkAndStartGame(roomId);
   });
 
   // Toggle Ready
@@ -71,30 +98,9 @@ io.on('connection', (socket) => {
     if (player) {
       player.isReady = !player.isReady;
       io.to(roomId).emit('room_update', room.players);
-    }
-  });
-
-  // Start Game
-  socket.on('start_game', (roomId) => {
-    const room = rooms[roomId];
-    if (!room) return;
-    
-    const allReady = room.players.every(p => p.isReady);
-    const playerCount = room.players.length;
-
-    // STRICT CHECK: Must have exactly 10 players and all must be ready
-    if (allReady && playerCount === REQUIRED_PLAYERS) {
-      room.status = 'PLAYING';
-      // Sync Start: Start in 3 seconds
-      const startTime = Date.now() + 3000;
-      io.to(roomId).emit('start_game', { startTime });
-    } else {
-       // Optional: Emit error if someone tries to force start
-       if (playerCount !== REQUIRED_PLAYERS) {
-           console.log(`Start failed: Only ${playerCount}/${REQUIRED_PLAYERS} players connected.`);
-       } else if (!allReady) {
-           console.log("Start failed: Not all players are ready.");
-       }
+      
+      // Check for auto-start whenever someone toggles ready
+      checkAndStartGame(roomId);
     }
   });
 
@@ -124,8 +130,7 @@ io.on('connection', (socket) => {
         if (room.players.length === 0) {
           delete rooms[roomId];
         } else {
-          // If game was playing and someone left, we might want to keep it running for others, 
-          // or if it was LOBBY, just update list.
+          // If game was LOBBY, just update list.
           io.to(roomId).emit('room_update', room.players);
         }
       }
