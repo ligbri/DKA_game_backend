@@ -21,7 +21,7 @@ const io = new Server(server, {
 
 // --- MANUAL CONFIGURATION ---
 const SERVER_CONFIG = {
-  REQUIRED_PLAYERS: 2 // Must match the frontend config
+  REQUIRED_PLAYERS: 3 // Must match the frontend config
 };
 
 app.get('/', (req, res) => {
@@ -112,8 +112,22 @@ io.on('connection', (socket) => {
     if (player) {
       player.score = score;
       player.status = status;
-      // Broadcast to others
-      socket.to(roomId).emit('player_updated', player);
+      
+      // FIX: Use io.to instead of socket.to so the sender ALSO gets the updated list.
+      // This fixes the bug where the local player's score was correct in HUD but wrong in Leaderboard.
+      io.to(roomId).emit('player_updated', player); 
+
+      // Check if everyone is finished/dead to end game early
+      const allDone = room.players.every(p => p.status === 'DEAD' || p.status === 'FINISHED');
+      if (allDone && room.status === 'PLAYING') {
+          console.log(`Room ${roomId}: All players finished. Forcing Game Over.`);
+          room.status = 'GAME_OVER'; // Mark room as over so new people can't join yet
+          // Emit final state to everyone
+          io.to(roomId).emit('force_game_over', room.players);
+          
+          // Optional: Reset room status after a delay if needed, 
+          // but relying on players to disconnect (Return to Menu) is safer for logic.
+      }
     }
   });
 
