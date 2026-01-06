@@ -21,7 +21,8 @@ const io = new Server(server, {
 
 // --- MANUAL CONFIGURATION ---
 const SERVER_CONFIG = {
-  REQUIRED_PLAYERS: 2 // Must match the frontend config
+  REQUIRED_PLAYERS: 2, // Must match the frontend config
+  LEADERBOARD_DURATION: 10000 // 10 Seconds to show leaderboard before purge
 };
 
 app.get('/', (req, res) => {
@@ -104,6 +105,31 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Kick Player (Only Captain/Player 1 can kick)
+  socket.on('kick_player', ({ roomId, targetId }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    // Validation: Only the first player (Captain) can kick
+    if (room.players.length > 0 && room.players[0].id === socket.id) {
+        // Prevent kicking self (though UI shouldn't allow it)
+        if (targetId === socket.id) return;
+
+        const targetIndex = room.players.findIndex(p => p.id === targetId);
+        if (targetIndex !== -1) {
+            // Remove from array
+            room.players.splice(targetIndex, 1);
+            
+            // Notify the specific target client they were kicked
+            // We use io.to(targetId) assuming targetId IS the socketId
+            io.to(targetId).emit('kicked');
+            
+            // Update everyone else
+            io.to(roomId).emit('room_update', room.players);
+        }
+    }
+  });
+
   // Update Player State (Score/Status)
   socket.on('update_player', ({ roomId, score, status }) => {
     const room = rooms[roomId];
@@ -113,20 +139,61 @@ io.on('connection', (socket) => {
       player.score = score;
       player.status = status;
       
-      // FIX: Use io.to instead of socket.to so the sender ALSO gets the updated list.
-      // This fixes the bug where the local player's score was correct in HUD but wrong in Leaderboard.
       io.to(roomId).emit('player_updated', player); 
 
       // Check if everyone is finished/dead to end game early
       const allDone = room.players.every(p => p.status === 'DEAD' || p.status === 'FINISHED');
       if (allDone && room.status === 'PLAYING') {
           console.log(`Room ${roomId}: All players finished. Forcing Game Over.`);
-          room.status = 'GAME_OVER'; // Mark room as over so new people can't join yet
-          // Emit final state to everyone
-          io.to(roomId).emit('force_game_over', room.players);
+          room.status = 'GAME_OVER'; 
           
-          // Optional: Reset room status after a delay if needed, 
-          // but relying on players to disconnect (Return to Menu) is safer for logic.
+          // Calculate reset time
+          const resetTime = Date.now() + SERVER_CONFIG.LEADERBOARD_DURATION;
+
+          // Emit final state to everyone with the reset timestamp
+          io.to(roomId).emit('force_game_over', { players: room.players, resetTime });
+          
+          // SERVER SIDE RESET LOGIC
+          setTimeout(() => {
+              // Ensure room still exists
+              if (!rooms[roomId]) return;
+              
+              const currentRoom = rooms[roomId];
+              if (currentRoom.status !== 'GAME_OVER') return; // State safety check
+
+              console.log(`Room ${roomId}: Resetting logic. Purging non-captains.`);
+
+              // 1. Identify Captain (Index 0)
+              if (currentRoom.players.length > 0) {
+                  const captain = currentRoom.players[0];
+                  
+                  // 2. Identify others
+                  const others = currentRoom.players.slice(1);
+                  
+                  // 3. Kick others
+                  others.forEach(p => {
+                      io.to(p.id).emit('kicked');
+                      // Note: We don't need to manually leave socket room, the client 'kicked' handler 
+                      // should trigger disconnect/reset. But effectively they are out of the game logic.
+                  });
+
+                  // 4. Reset Captain State
+                  captain.isReady = false;
+                  captain.score = 0;
+                  captain.status = 'ALIVE';
+
+                  // 5. Reset Room Data
+                  currentRoom.players = [captain]; // Only captain remains
+                  currentRoom.status = 'LOBBY';
+
+                  // 6. Notify Captain (This will trigger their transition back to Waiting Room)
+                  io.to(roomId).emit('room_update', currentRoom.players);
+              } else {
+                  // Room empty, delete
+                  delete rooms[roomId];
+              }
+
+          }, SERVER_CONFIG.LEADERBOARD_DURATION);
       }
     }
   });
