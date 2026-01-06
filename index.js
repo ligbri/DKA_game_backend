@@ -21,7 +21,7 @@ const io = new Server(server, {
 
 // --- MANUAL CONFIGURATION ---
 const SERVER_CONFIG = {
-  REQUIRED_PLAYERS: 10 // Must match the frontend config
+  REQUIRED_PLAYERS: 2 // Must match the frontend config
 };
 
 app.get('/', (req, res) => {
