@@ -46,8 +46,7 @@ const checkAndStartGame = (roomId) => {
       room.status = 'PLAYING';
       // Sync Start: Start in 3 seconds
       const startTime = Date.now() + 3000;
-      // Broadcast config. If none stored (shouldn't happen if captain sent it), empty object.
-      io.to(roomId).emit('start_game', { startTime, config: room.gameConfig || {} });
+      io.to(roomId).emit('start_game', { startTime });
     }
   }
 };
@@ -93,23 +92,12 @@ io.on('connection', (socket) => {
   });
 
   // Toggle Ready
-  socket.on('toggle_ready', (data) => {
-    // Handle both old (string) and new (object) payload formats for robustness
-    const roomId = (typeof data === 'object' && data.roomId) ? data.roomId : data;
-    const config = (typeof data === 'object' && data.config) ? data.config : null;
-
+  socket.on('toggle_ready', (roomId) => {
     const room = rooms[roomId];
     if (!room) return;
     const player = room.players.find(p => p.id === socket.id);
     if (player) {
       player.isReady = !player.isReady;
-      
-      // If Captain (index 0) becomes ready (or toggles), update room config
-      if (room.players.indexOf(player) === 0 && config) {
-          room.gameConfig = config;
-          console.log(`Room ${roomId}: Game Config synced from Captain:`, config);
-      }
-
       io.to(roomId).emit('room_update', room.players);
       
       // Check for auto-start whenever someone toggles ready
