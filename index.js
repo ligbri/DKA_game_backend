@@ -21,7 +21,7 @@ const io = new Server(server, {
 
 // --- MANUAL CONFIGURATION ---
 const SERVER_CONFIG = {
-  REQUIRED_PLAYERS: 3, // Must match the frontend config
+  REQUIRED_PLAYERS: 6, // Must match the frontend config
   LEADERBOARD_DURATION: 10000 // 10 Seconds to show leaderboard before purge
 };
 
